@@ -8,37 +8,46 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 	"unsafe"
 )
 
 const (
+	workersCount = 4
 	port         = 6379
 	pingRequest  = "*1\r\n$4\r\nPING\r\n"
 	pingResponse = "+PONG\r\n"
 	bufSize      = 1000
 )
 
-func commandWorker(conn net.Conn) error {
-	buff := make([]byte, bufSize)
-	for n, err := conn.Read(buff); n != 0 && err != io.EOF; n, err = conn.Read(buff) {
+func commandWorker(workerId int, listener net.Listener) {
+	logger := slog.Default().With("worker", workerId)
+	for {
+		conn, err := listener.Accept()
 		if err != nil {
-			return fmt.Errorf("failed to read command: %v\n", err)
+			log.Panicf("error accepting connection: %v\n", err)
 		}
-		cmd := buff[:n]
-		slog.Debug("command reader read", "bytes", n, "cmd", cmd)
-
-		if bytes.Equal(cmd, unsafe.Slice(unsafe.StringData(pingRequest), len(pingRequest))) {
-			n, err := conn.Write(unsafe.Slice(unsafe.StringData(pingResponse), len(pingResponse)))
+		logger.Debug("new connection established")
+		defer conn.Close()
+		buff := make([]byte, bufSize)
+		for n, err := conn.Read(buff); n != 0 && err != io.EOF; n, err = conn.Read(buff) {
 			if err != nil {
-				return fmt.Errorf("failed to write command response: %w", err)
+				log.Panicf("failed to read command: %v\n", err)
 			}
-			if n != len(pingResponse) {
-				return fmt.Errorf("writing ping response resulted in %d bytes, but expected %d", n, len(pingResponse))
+			cmd := buff[:n]
+			logger.Debug("command reader read", "bytes", n, "cmd", cmd)
+
+			if bytes.Equal(cmd, unsafe.Slice(unsafe.StringData(pingRequest), len(pingRequest))) {
+				n, err := conn.Write(unsafe.Slice(unsafe.StringData(pingResponse), len(pingResponse)))
+				if err != nil {
+					log.Panicf("failed to write command response: %v", err)
+				}
+				if n != len(pingResponse) {
+					log.Panicf("writing ping response resulted in %d bytes, but expected %d", n, len(pingResponse))
+				}
 			}
 		}
 	}
-	// TODO: read all, set timeout
-	return nil
 }
 
 func main() {
@@ -49,24 +58,19 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 
-	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		log.Fatalf("Failed to bind to port %d", port)
 		os.Exit(1)
 	}
 
-	for {
-		err := func() error {
-			conn, err := l.Accept()
-			if err != nil {
-				return fmt.Errorf("error accepting connection: %w\n", err)
-			}
-			slog.Debug("new connection established")
-			defer conn.Close()
-			return commandWorker(conn)
+	wg := sync.WaitGroup{}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			commandWorker(i, listener)
 		}()
-		if err != nil {
-			slog.Warn("connection processing error", "err", err)
-		}
 	}
+	wg.Wait()
 }
