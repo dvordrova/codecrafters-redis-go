@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -9,19 +8,47 @@ import (
 	"net"
 	"os"
 	"sync"
-	"unsafe"
 )
 
 const (
 	workersCount = 4
 	port         = 6379
-	pingRequest  = "*1\r\n$4\r\nPING\r\n"
-	pingResponse = "+PONG\r\n"
 	bufSize      = 1000
 )
 
 func commandWorker(workerId int, listener net.Listener) {
 	logger := slog.Default().With("worker", workerId)
+
+	sendGood := func(conn net.Conn, msg string) {
+		n, err := conn.Write([]byte(fmt.Sprintf("+%s\r\n", msg)))
+		if n < len(msg) || err != nil {
+			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
+		}
+	}
+	sendBad := func(conn net.Conn, msg string) {
+		n, err := conn.Write([]byte(fmt.Sprintf("-%s\r\n", msg)))
+		if n < len(msg) || err != nil {
+			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
+		}
+	}
+
+	cmdPing := func(conn net.Conn, args ...string) {
+		sendGood(conn, "PONG")
+	}
+
+	cmdEcho := func(conn net.Conn, args ...string) {
+		if len(args) != 1 {
+			sendBad(conn, "ERR 'echo' command accepts 1 param")
+		} else {
+			sendGood(conn, args[0])
+		}
+	}
+
+	commands := map[string]func(net.Conn, ...string){
+		"echo": cmdEcho,
+		"ping": cmdPing,
+	}
+new_connection:
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -29,23 +56,30 @@ func commandWorker(workerId int, listener net.Listener) {
 		}
 		logger.Debug("new connection established")
 		defer conn.Close()
+		request := make([]byte, 0, bufSize)
 		buff := make([]byte, bufSize)
 		for n, err := conn.Read(buff); n != 0 && err != io.EOF; n, err = conn.Read(buff) {
 			if err != nil {
-				log.Panicf("failed to read command: %v\n", err)
+				logger.Warn("failed to read command: %v\n", err)
+				continue new_connection
 			}
-			cmd := buff[:n]
-			logger.Debug("command reader read", "bytes", n, "cmd", cmd)
-
-			if bytes.Equal(cmd, unsafe.Slice(unsafe.StringData(pingRequest), len(pingRequest))) {
-				n, err := conn.Write(unsafe.Slice(unsafe.StringData(pingResponse), len(pingResponse)))
-				if err != nil {
-					log.Panicf("failed to write command response: %v", err)
-				}
-				if n != len(pingResponse) {
-					log.Panicf("writing ping response resulted in %d bytes, but expected %d", n, len(pingResponse))
-				}
+			logger.Debug("command reader read", "bytes", n, "cmd", buff[:n])
+			request = append(request, buff[:n]...)
+			parsedCmd, err := parseCommand(request)
+			if err != nil {
+				logger.Warn("bad parsing command", "err", err)
+				sendBad(conn, fmt.Sprintf("ERR %v", err))
 			}
+			if len(parsedCmd) == 0 {
+				sendBad(conn, "ERR empty command")
+				continue
+			}
+			cmd, ok := commands[parsedCmd[0]]
+			if !ok {
+				sendBad(conn, fmt.Sprintf("ERR unknown command %s", parsedCmd[0]))
+				continue
+			}
+			cmd(conn, parsedCmd[1:]...)
 		}
 	}
 }
