@@ -16,20 +16,28 @@ const (
 	bufSize      = 1000
 )
 
+var values sync.Map
+
 func commandWorker(workerId int, listener net.Listener) {
 	logger := slog.Default().With("worker", workerId)
 
-	sendGood := func(conn net.Conn, msg string) {
-		n, err := conn.Write([]byte(fmt.Sprintf("+%s\r\n", msg)))
+	send := func(conn net.Conn, msg string) {
+		n, err := conn.Write([]byte(msg))
 		if n < len(msg) || err != nil {
 			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
 		}
 	}
+	sendGood := func(conn net.Conn, msg string) {
+		send(conn, fmt.Sprintf("+%s\r\n", msg))
+	}
+	sendBulk := func(conn net.Conn, msg string) {
+		send(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(msg), msg))
+	}
+	sendEmptyBulk := func(conn net.Conn) {
+		send(conn, "$-1\r\n")
+	}
 	sendBad := func(conn net.Conn, msg string) {
-		n, err := conn.Write([]byte(fmt.Sprintf("-%s\r\n", msg)))
-		if n < len(msg) || err != nil {
-			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
-		}
+		send(conn, fmt.Sprintf("-%s\r\n", msg))
 	}
 
 	cmdPing := func(conn net.Conn, args ...string) {
@@ -44,9 +52,32 @@ func commandWorker(workerId int, listener net.Listener) {
 		}
 	}
 
+	cmdSet := func(conn net.Conn, args ...string) {
+		if len(args) != 2 {
+			sendBad(conn, "ERR 'set' command accepts 2 params")
+		}
+		values.Store(args[0], args[1])
+		sendGood(conn, "OK")
+	}
+
+	cmdGet := func(conn net.Conn, args ...string) {
+		if len(args) != 1 {
+			sendBad(conn, "ERR 'get' command accepts 1 param")
+		}
+
+		if res, ok := values.Load(args[0]); !ok {
+			sendEmptyBulk(conn)
+		} else {
+			sendBulk(conn, res.(string))
+		}
+
+	}
+
 	commands := map[string]func(net.Conn, ...string){
 		"echo": cmdEcho,
 		"ping": cmdPing,
+		"set":  cmdSet,
+		"get":  cmdGet,
 	}
 new_connection:
 	for {
