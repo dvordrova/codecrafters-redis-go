@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,10 +14,14 @@ import (
 const (
 	workersCount = 4
 	port         = 6379
-	bufSize      = 1000
+	bufSize      = 1024
 )
 
 var values sync.Map
+
+// read(conn)
+// 1) command + command - process few commands
+// 2) last command is not processed
 
 func commandWorker(workerId int, listener net.Listener) {
 	logger := slog.Default().With("worker", workerId)
@@ -79,38 +84,48 @@ func commandWorker(workerId int, listener net.Listener) {
 		"set":  cmdSet,
 		"get":  cmdGet,
 	}
-new_connection:
+next_connection:
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Panicf("error accepting connection: %v\n", err)
+			logger.Warn("error accepting connection", "err", err)
+			continue
 		}
 		logger.Debug("new connection established")
 		defer conn.Close()
 		request := make([]byte, 0, bufSize)
-		buff := make([]byte, bufSize)
-		for n, err := conn.Read(buff); n != 0 && err != io.EOF; n, err = conn.Read(buff) {
+		buf := make([]byte, bufSize)
+		for n, err := conn.Read(buf); n != 0 || err != io.EOF; n, err = conn.Read(buf) {
 			if err != nil {
-				logger.Warn("failed to read command: %v\n", err)
-				continue new_connection
+				logger.Warn("failed read", "err", err)
+				continue next_connection
 			}
-			logger.Debug("command reader read", "bytes", n, "cmd", buff[:n])
-			request = append(request, buff[:n]...)
-			parsedCmd, err := parseCommand(request)
-			if err != nil {
-				logger.Warn("bad parsing command", "err", err)
-				sendBad(conn, fmt.Sprintf("ERR %v", err))
+			request = append(request, buf[:n]...)
+			logger.Debug("read from connection", "bytes", n)
+			for len(request) != 0 {
+				parsedCmd, newStart, err := parseCommand(request)
+				errNotParsed := &ErrorNotAllParsed{}
+				if errors.As(err, &errNotParsed) {
+					break
+				}
+				if err != nil {
+					logger.Warn("bad parsing command", "err", err)
+					sendBad(conn, fmt.Sprintf("ERR %v", err))
+					continue next_connection
+				}
+				request = request[newStart:]
+
+				if len(parsedCmd) == 0 {
+					sendBad(conn, "ERR empty command")
+					continue next_connection
+				}
+				cmd, ok := commands[parsedCmd[0]]
+				if !ok {
+					sendBad(conn, fmt.Sprintf("ERR unknown command %s", parsedCmd[0]))
+					continue next_connection
+				}
+				cmd(conn, parsedCmd[1:]...)
 			}
-			if len(parsedCmd) == 0 {
-				sendBad(conn, "ERR empty command")
-				continue
-			}
-			cmd, ok := commands[parsedCmd[0]]
-			if !ok {
-				sendBad(conn, fmt.Sprintf("ERR unknown command %s", parsedCmd[0]))
-				continue
-			}
-			cmd(conn, parsedCmd[1:]...)
 		}
 	}
 }

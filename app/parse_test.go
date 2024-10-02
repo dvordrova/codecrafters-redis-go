@@ -20,7 +20,7 @@ func TestParseCommand(t *testing.T) {
 			expectedResult: []string{"echo", "hey"},
 		},
 	} {
-		result, err := parseCommand([]byte(test.request))
+		result, _, err := parseCommand([]byte(test.request))
 		if !slices.Equal(result, test.expectedResult) || err != test.expectedError {
 			t.Logf(
 				"for %v expected %v, %v, but got %v, %v",
