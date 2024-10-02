@@ -8,7 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -18,6 +21,11 @@ const (
 )
 
 var values sync.Map
+
+type ValueWithExpiration struct {
+	Value  string
+	Expire time.Time
+}
 
 // read(conn)
 // 1) command + command - process few commands
@@ -58,10 +66,28 @@ func commandWorker(workerId int, listener net.Listener) {
 	}
 
 	cmdSet := func(conn net.Conn, args ...string) {
-		if len(args) != 2 {
-			sendBad(conn, "ERR 'set' command accepts 2 params")
+		if len(args) != 2 && len(args) != 4 {
+			sendBad(conn, "ERR 'set' usage: set <key> <value> [PX <time_ms>]")
+			return
 		}
-		values.Store(args[0], args[1])
+		if len(args) == 2 {
+			values.Store(args[0], args[1])
+			sendGood(conn, "OK")
+			return
+		}
+		if strings.ToLower(args[2]) != "px" {
+			sendBad(conn, "ERR 'set' usage: set <key> <value> [PX <time_ms>]")
+			return
+		}
+		ms, err := strconv.Atoi(args[3])
+		if err != nil || ms < 0 {
+			sendBad(conn, "ERR 'set' usage: set <key> <value> [PX <time_ms>]")
+			return
+		}
+		values.Store(args[0], ValueWithExpiration{
+			Value:  args[1],
+			Expire: time.Now().Add(time.Duration(ms) * time.Millisecond),
+		})
 		sendGood(conn, "OK")
 	}
 
@@ -70,12 +96,25 @@ func commandWorker(workerId int, listener net.Listener) {
 			sendBad(conn, "ERR 'get' command accepts 1 param")
 		}
 
-		if res, ok := values.Load(args[0]); !ok {
+		key := args[0]
+		value, ok := values.Load(key)
+		if !ok {
 			sendEmptyBulk(conn)
-		} else {
-			sendBulk(conn, res.(string))
+			return
 		}
-
+		switch r := value.(type) {
+		case ValueWithExpiration:
+			if time.Now().Before(r.Expire) {
+				sendBulk(conn, r.Value)
+			} else {
+				values.CompareAndDelete(key, value)
+				sendEmptyBulk(conn)
+			}
+		case string:
+			sendBulk(conn, r)
+		default:
+			logger.Error("something strange saved in map %s", "key", key)
+		}
 	}
 
 	commands := map[string]func(net.Conn, ...string){
