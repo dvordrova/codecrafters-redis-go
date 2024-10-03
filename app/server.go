@@ -21,10 +21,11 @@ const (
 )
 
 var (
-	values   sync.Map
-	port     = flag.Int("port", 6379, "port")
-	logLevel = flag.String("loglevel", "DEBUG", "log level")
-	role     = flag.String("role", "master", "replication role")
+	values    sync.Map
+	port      = flag.Int("port", 6379, "port")
+	logLevel  = flag.String("loglevel", "DEBUG", "log level")
+	replicaOf = flag.String("replicaof", "", "master replica in format '<MASTER_HOST> <MASTER_PORT>'")
+	role      = "master"
 )
 
 type ValueWithExpiration struct {
@@ -73,7 +74,7 @@ func commandWorker(workerId int, listener net.Listener) {
 			return
 		}
 		// FIXME: https://redis.io/docs/latest/commands/info/
-		sendBulk(conn, fmt.Sprintf("role:%s", *role))
+		sendBulk(conn, fmt.Sprintf("role:%s", role))
 	}
 
 	cmdSet := func(conn net.Conn, args ...string) {
@@ -192,6 +193,11 @@ func main() {
 		Level: level,
 	})
 	slog.SetDefault(slog.New(logger))
+
+	if *replicaOf != "" {
+		// TODO: parse and connect
+		role = "slave"
+	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *port))
 	if err != nil {
