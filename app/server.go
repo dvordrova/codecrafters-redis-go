@@ -24,6 +24,7 @@ var (
 	values   sync.Map
 	port     = flag.Int("port", 6379, "port")
 	logLevel = flag.String("loglevel", "DEBUG", "log level")
+	role     = flag.String("role", "master", "replication role")
 )
 
 type ValueWithExpiration struct {
@@ -61,9 +62,18 @@ func commandWorker(workerId int, listener net.Listener) {
 	cmdEcho := func(conn net.Conn, args ...string) {
 		if len(args) != 1 {
 			sendBad(conn, "ERR 'echo' command accepts 1 param")
-		} else {
-			sendGood(conn, args[0])
+			return
 		}
+		sendGood(conn, args[0])
+	}
+
+	cmdInfo := func(conn net.Conn, args ...string) {
+		if len(args) != 1 {
+			sendBad(conn, "ERR 'info' command accepts 1 param")
+			return
+		}
+		// FIXME: https://redis.io/docs/latest/commands/info/
+		sendBulk(conn, fmt.Sprintf("role:%s", *role))
 	}
 
 	cmdSet := func(conn net.Conn, args ...string) {
@@ -123,6 +133,7 @@ func commandWorker(workerId int, listener net.Listener) {
 		"ping": cmdPing,
 		"set":  cmdSet,
 		"get":  cmdGet,
+		"info": cmdInfo,
 	}
 next_connection:
 	for {
