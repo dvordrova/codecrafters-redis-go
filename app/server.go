@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -16,25 +17,25 @@ import (
 
 const (
 	workersCount = 4
-	port         = 6379
 	bufSize      = 1024
 )
 
-var values sync.Map
+var (
+	values   sync.Map
+	port     = flag.Int("port", 6379, "port")
+	logLevel = flag.String("loglevel", "DEBUG", "log level")
+)
 
 type ValueWithExpiration struct {
 	Value  string
 	Expire time.Time
 }
 
-// read(conn)
-// 1) command + command - process few commands
-// 2) last command is not processed
-
 func commandWorker(workerId int, listener net.Listener) {
 	logger := slog.Default().With("worker", workerId)
 
 	send := func(conn net.Conn, msg string) {
+		logger.Debug("sending", "msg", msg)
 		n, err := conn.Write([]byte(msg))
 		if n < len(msg) || err != nil {
 			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
@@ -170,18 +171,23 @@ next_connection:
 }
 
 func main() {
+	var level slog.Level
+	flag.Parse()
+	err := level.UnmarshalText([]byte(*logLevel))
+	if err != nil {
+		log.Panicf("error parsing log-level: %v", err)
+	}
 	logger := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: level,
 	})
 	slog.SetDefault(slog.New(logger))
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *port))
 	if err != nil {
-		log.Fatalf("Failed to bind to port %d", port)
+		log.Fatalf("Failed to bind to port %d", *port)
 		os.Exit(1)
 	}
+	slog.Debug("redis is listening", "port", *port)
 
 	wg := sync.WaitGroup{}
 	for i := 0; i < 4; i++ {

@@ -22,6 +22,9 @@ func parseCommand(request []byte) (result []string, pos int, err error) {
 	if len(request) == 0 {
 		return nil, 0, &ErrorNotAllParsed{"expecting array but got nothing"}
 	}
+	if len(request) == 6 && string(request) == "PING\r\n" {
+		return []string{"ping"}, 6, nil
+	}
 	if request[0] != '*' {
 		err = fmt.Errorf("expecting array prefix '*' but got %c", request[0])
 		return
