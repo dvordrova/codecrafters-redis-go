@@ -25,7 +25,7 @@ var (
 	port      = flag.Int("port", 6379, "port")
 	logLevel  = flag.String("loglevel", "DEBUG", "log level")
 	replicaOf = flag.String("replicaof", "", "master replica in format '<MASTER_HOST> <MASTER_PORT>'")
-	role      = "master"
+	redisInfo RedisInfo
 )
 
 type ValueWithExpiration struct {
@@ -73,8 +73,7 @@ func commandWorker(workerId int, listener net.Listener) {
 			sendBad(conn, "ERR 'info' command accepts 1 param")
 			return
 		}
-		// FIXME: https://redis.io/docs/latest/commands/info/
-		sendBulk(conn, fmt.Sprintf("role:%s", role))
+		sendBulk(conn, redisInfo.String())
 	}
 
 	cmdSet := func(conn net.Conn, args ...string) {
@@ -196,7 +195,9 @@ func main() {
 
 	if *replicaOf != "" {
 		// TODO: parse and connect
-		role = "slave"
+		redisInfo = NewRedisInfo("slave")
+	} else {
+		redisInfo = NewRedisInfo("master")
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *port))
