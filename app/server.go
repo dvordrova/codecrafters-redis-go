@@ -21,11 +21,12 @@ const (
 )
 
 var (
-	values    sync.Map
-	port      = flag.Int("port", 6379, "port")
-	logLevel  = flag.String("loglevel", "DEBUG", "log level")
-	replicaOf = flag.String("replicaof", "", "master replica in format '<MASTER_HOST> <MASTER_PORT>'")
-	redisInfo RedisInfo
+	values      sync.Map
+	port        = flag.Int("port", 6379, "port")
+	logLevel    = flag.String("loglevel", "DEBUG", "log level")
+	replicaOf   = flag.String("replicaof", "", "master replica in format '<MASTER_HOST> <MASTER_PORT>'")
+	redisInfo   RedisInfo
+	redisClient *RedisClient
 )
 
 type ValueWithExpiration struct {
@@ -169,6 +170,10 @@ next_connection:
 	}
 }
 
+func parseAddress(hostPort string) string {
+	return strings.Join(strings.Split(hostPort, " "), ":")
+}
+
 func main() {
 	var level slog.Level
 	flag.Parse()
@@ -184,6 +189,12 @@ func main() {
 	if *replicaOf != "" {
 		// TODO: parse and connect
 		redisInfo = NewRedisInfo("slave")
+		address := parseAddress(*replicaOf)
+		redisClient, err = NewRedisClient(address)
+		if err != nil {
+			log.Panic(err)
+		}
+		slog.Info("connected to redis server", "address", address)
 	} else {
 		redisInfo = NewRedisInfo("master")
 	}
