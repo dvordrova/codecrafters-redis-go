@@ -43,86 +43,74 @@ func commandWorker(workerId int, listener net.Listener) {
 			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
 		}
 	}
-	sendGood := func(conn net.Conn, msg string) {
-		send(conn, fmt.Sprintf("+%s\r\n", msg))
-	}
-	sendBulk := func(conn net.Conn, msg string) {
-		send(conn, fmt.Sprintf("$%d\r\n%s\r\n", len(msg), msg))
-	}
-	sendEmptyBulk := func(conn net.Conn) {
-		send(conn, "$-1\r\n")
-	}
-	sendBad := func(conn net.Conn, msg string) {
-		send(conn, fmt.Sprintf("-%s\r\n", msg))
-	}
 
 	cmdPing := func(conn net.Conn, args ...string) {
-		sendGood(conn, "PONG")
+		send(conn, respString("PONG"))
 	}
 
 	cmdEcho := func(conn net.Conn, args ...string) {
 		if len(args) != 1 {
-			sendBad(conn, "ERR 'echo' command accepts 1 param")
+			send(conn, respError("ERR 'echo' command accepts 1 param"))
 			return
 		}
-		sendGood(conn, args[0])
+		send(conn, respString(args[0]))
 	}
 
 	cmdInfo := func(conn net.Conn, args ...string) {
 		if len(args) != 1 {
-			sendBad(conn, "ERR 'info' command accepts 1 param")
+			send(conn, respError("ERR 'info' command accepts 1 param"))
 			return
 		}
-		sendBulk(conn, redisInfo.String())
+		send(conn, respString(redisInfo.String()))
 	}
 
 	cmdSet := func(conn net.Conn, args ...string) {
 		if len(args) != 2 && len(args) != 4 {
-			sendBad(conn, "ERR 'set' usage: set <key> <value> [PX <time_ms>]")
+			send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
 			return
 		}
 		if len(args) == 2 {
 			values.Store(args[0], args[1])
-			sendGood(conn, "OK")
+			send(conn, respString("OK"))
 			return
 		}
 		if strings.ToLower(args[2]) != "px" {
-			sendBad(conn, "ERR 'set' usage: set <key> <value> [PX <time_ms>]")
+			send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
 			return
 		}
 		ms, err := strconv.Atoi(args[3])
 		if err != nil || ms < 0 {
-			sendBad(conn, "ERR 'set' usage: set <key> <value> [PX <time_ms>]")
+			send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
 			return
 		}
 		values.Store(args[0], ValueWithExpiration{
 			Value:  args[1],
 			Expire: time.Now().Add(time.Duration(ms) * time.Millisecond),
 		})
-		sendGood(conn, "OK")
+		send(conn, respString("OK"))
 	}
 
 	cmdGet := func(conn net.Conn, args ...string) {
 		if len(args) != 1 {
-			sendBad(conn, "ERR 'get' command accepts 1 param")
+			send(conn, respError("ERR 'get' command accepts 1 param"))
 		}
 
 		key := args[0]
 		value, ok := values.Load(key)
 		if !ok {
-			sendEmptyBulk(conn)
+			send(conn, respBulkString())
 			return
 		}
 		switch r := value.(type) {
 		case ValueWithExpiration:
 			if time.Now().Before(r.Expire) {
-				sendBulk(conn, r.Value)
+				send(conn, respBulkString(r.Value))
 			} else {
 				values.CompareAndDelete(key, value)
-				sendEmptyBulk(conn)
+				send(conn, respBulkString())
 			}
 		case string:
-			sendBulk(conn, r)
+			send(conn, respBulkString(r))
 		default:
 			logger.Error("something strange saved in map %s", "key", key)
 		}
@@ -161,18 +149,18 @@ next_connection:
 				}
 				if err != nil {
 					logger.Warn("bad parsing command", "err", err)
-					sendBad(conn, fmt.Sprintf("ERR %v", err))
+					send(conn, respError(fmt.Sprintf("ERR %v", err)))
 					continue next_connection
 				}
 				request = request[newStart:]
 
 				if len(parsedCmd) == 0 {
-					sendBad(conn, "ERR empty command")
+					send(conn, respError("ERR empty command"))
 					continue next_connection
 				}
 				cmd, ok := commands[parsedCmd[0]]
 				if !ok {
-					sendBad(conn, fmt.Sprintf("ERR unknown command %s", parsedCmd[0]))
+					send(conn, respError(fmt.Sprintf("ERR unknown command %s", parsedCmd[0])))
 					continue next_connection
 				}
 				cmd(conn, parsedCmd[1:]...)
