@@ -117,12 +117,17 @@ func commandWorker(workerId int, listener net.Listener) {
 		}
 	}
 
+	cmdReplConf := func(conn net.Conn, args ...string) {
+		send(conn, respString("OK"))
+	}
+
 	commands := map[string]func(net.Conn, ...string){
-		"echo": cmdEcho,
-		"ping": cmdPing,
-		"set":  cmdSet,
-		"get":  cmdGet,
-		"info": cmdInfo,
+		"echo":     cmdEcho,
+		"ping":     cmdPing,
+		"set":      cmdSet,
+		"get":      cmdGet,
+		"info":     cmdInfo,
+		"replconf": cmdReplConf,
 	}
 next_connection:
 	for {
@@ -190,7 +195,7 @@ func main() {
 		// TODO: parse and connect
 		redisInfo = NewRedisInfo("slave")
 		address := parseAddress(*replicaOf)
-		redisClient, err = NewRedisClient(address)
+		redisClient, err = NewRedisClient(address, *port)
 		if err != nil {
 			log.Panic(err)
 		}

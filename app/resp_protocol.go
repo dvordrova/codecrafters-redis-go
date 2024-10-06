@@ -21,11 +21,11 @@ func respBulkString(msg ...string) string {
 	}
 }
 
-func respCommand(msgs ...string) string {
+func respCommand(cmd string, args ...string) string {
 	res := strings.Builder{}
-	res.WriteString(fmt.Sprintf("*%d", len(msgs)))
-	for _, msg := range msgs {
-		res.WriteString(fmt.Sprintf("\r\n$%d\r\n%s", len(msg), msg))
+	res.WriteString(fmt.Sprintf("*%d\r\n$%d\r\n%s", len(args)+1, len(cmd), cmd))
+	for _, arg := range args {
+		res.WriteString(fmt.Sprintf("\r\n$%d\r\n%s", len(arg), arg))
 	}
 	res.WriteString("\r\n")
 	return res.String()
