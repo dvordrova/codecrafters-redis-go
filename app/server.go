@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -32,6 +33,18 @@ var (
 type ValueWithExpiration struct {
 	Value  string
 	Expire time.Time
+}
+
+func getRDBSnapshot() []byte {
+	emptySnapshot := []byte("UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==")
+	rdbSnapshot := make([]byte, 88)
+	_, err := base64.StdEncoding.Decode(rdbSnapshot, emptySnapshot)
+	if err != nil {
+		log.Panic("something wrong with rdb snapshot", err)
+	}
+	res := []byte("$88\r\n")
+	res = append(res, rdbSnapshot...)
+	return res
 }
 
 func commandWorker(workerId int, listener net.Listener) {
@@ -122,8 +135,8 @@ func commandWorker(workerId int, listener net.Listener) {
 	}
 
 	cmdPsync := func(conn net.Conn, args ...string) {
-		// TODO WHAT
 		send(conn, respString(fmt.Sprintf("FULLRESYNC %s 0", redisInfo.GetMasterReplId())))
+		send(conn, string(getRDBSnapshot()))
 	}
 
 	commands := map[string]func(net.Conn, ...string){

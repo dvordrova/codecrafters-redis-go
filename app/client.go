@@ -42,6 +42,10 @@ func (client *RedisClient) sendCommand(cmd string, args ...string) (string, erro
 	return scanner.Text(), nil
 }
 
+func (client *RedisClient) readRDBSnapshot() {
+	return
+}
+
 func (client *RedisClient) doHandShake(myPort int) error {
 	result, err := client.sendCommand("PING")
 	if err != nil {
@@ -71,6 +75,7 @@ func (client *RedisClient) doHandShake(myPort int) error {
 	if err != nil {
 		return fmt.Errorf("psync command failed: %w", err)
 	}
+	client.readRDBSnapshot()
 
 	// TODO
 	// if result != "+OK" {
