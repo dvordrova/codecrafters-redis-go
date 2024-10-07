@@ -26,6 +26,10 @@ func (info *RedisInfo) String() string {
 	return fmt.Sprintf("%s", &info.replication)
 }
 
+func (info *RedisInfo) GetMasterReplId() string {
+	return info.replication.masterReplId
+}
+
 type replicationInfo struct {
 	role             string
 	masterReplId     string

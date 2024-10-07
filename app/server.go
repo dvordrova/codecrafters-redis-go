@@ -123,7 +123,7 @@ func commandWorker(workerId int, listener net.Listener) {
 
 	cmdPsync := func(conn net.Conn, args ...string) {
 		// TODO WHAT
-		send(conn, respString("FULLRESYNC <REPL_ID> 0"))
+		send(conn, respString(fmt.Sprintf("FULLRESYNC %s 0", redisInfo.GetMasterReplId())))
 	}
 
 	commands := map[string]func(net.Conn, ...string){
