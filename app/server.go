@@ -121,6 +121,11 @@ func commandWorker(workerId int, listener net.Listener) {
 		send(conn, respString("OK"))
 	}
 
+	cmdPsync := func(conn net.Conn, args ...string) {
+		// TODO WHAT
+		send(conn, respString("FULLRESYNC <REPL_ID> 0"))
+	}
+
 	commands := map[string]func(net.Conn, ...string){
 		"echo":     cmdEcho,
 		"ping":     cmdPing,
@@ -128,6 +133,7 @@ func commandWorker(workerId int, listener net.Listener) {
 		"get":      cmdGet,
 		"info":     cmdInfo,
 		"replconf": cmdReplConf,
+		"psync":    cmdPsync,
 	}
 next_connection:
 	for {
