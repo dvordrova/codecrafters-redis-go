@@ -69,7 +69,7 @@ func (cmdSet CommandSet) Call(conn net.Conn, args ...string) error {
 	if len(args) == 2 {
 		cmdSet.values.Store(args[0], args[1])
 		if cmdSet.replicasManager != nil {
-			go cmdSet.replicasManager.LogCommand("echo", args...)
+			go cmdSet.replicasManager.LogCommand("set", args...)
 		}
 		return send(conn, respString("OK"))
 	}
