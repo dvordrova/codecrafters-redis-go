@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +19,12 @@ const (
 	workersCount = 4
 	bufSize      = 1024
 )
+
+// command:
+// name
+// action
+// answer
+//
 
 var (
 	values      sync.Map
@@ -47,106 +52,17 @@ func getRDBSnapshot() []byte {
 	return res
 }
 
-func commandWorker(workerId int, listener net.Listener) {
+func commandWorker(workerId int, listener net.Listener, replicasManager *ReplicasManager) {
 	logger := slog.Default().With("worker", workerId)
 
-	send := func(conn net.Conn, msg string) {
-		logger.Debug("sending", "msg", msg)
-		n, err := conn.Write([]byte(msg))
-		if n < len(msg) || err != nil {
-			logger.Warn("couldn't send", "sent", n, "size", len(msg), "err", err)
-		}
-	}
-
-	cmdPing := func(conn net.Conn, args ...string) {
-		send(conn, respString("PONG"))
-	}
-
-	cmdEcho := func(conn net.Conn, args ...string) {
-		if len(args) != 1 {
-			send(conn, respError("ERR 'echo' command accepts 1 param"))
-			return
-		}
-		send(conn, respString(args[0]))
-	}
-
-	cmdInfo := func(conn net.Conn, args ...string) {
-		if len(args) != 1 {
-			send(conn, respError("ERR 'info' command accepts 1 param"))
-			return
-		}
-		send(conn, respString(redisInfo.String()))
-	}
-
-	cmdSet := func(conn net.Conn, args ...string) {
-		if len(args) != 2 && len(args) != 4 {
-			send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
-			return
-		}
-		if len(args) == 2 {
-			values.Store(args[0], args[1])
-			send(conn, respString("OK"))
-			return
-		}
-		if strings.ToLower(args[2]) != "px" {
-			send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
-			return
-		}
-		ms, err := strconv.Atoi(args[3])
-		if err != nil || ms < 0 {
-			send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
-			return
-		}
-		values.Store(args[0], ValueWithExpiration{
-			Value:  args[1],
-			Expire: time.Now().Add(time.Duration(ms) * time.Millisecond),
-		})
-		send(conn, respString("OK"))
-	}
-
-	cmdGet := func(conn net.Conn, args ...string) {
-		if len(args) != 1 {
-			send(conn, respError("ERR 'get' command accepts 1 param"))
-		}
-
-		key := args[0]
-		value, ok := values.Load(key)
-		if !ok {
-			send(conn, respBulkString())
-			return
-		}
-		switch r := value.(type) {
-		case ValueWithExpiration:
-			if time.Now().Before(r.Expire) {
-				send(conn, respBulkString(r.Value))
-			} else {
-				values.CompareAndDelete(key, value)
-				send(conn, respBulkString())
-			}
-		case string:
-			send(conn, respBulkString(r))
-		default:
-			logger.Error("something strange saved in map %s", "key", key)
-		}
-	}
-
-	cmdReplConf := func(conn net.Conn, args ...string) {
-		send(conn, respString("OK"))
-	}
-
-	cmdPsync := func(conn net.Conn, args ...string) {
-		send(conn, respString(fmt.Sprintf("FULLRESYNC %s 0", redisInfo.GetMasterReplId())))
-		send(conn, string(getRDBSnapshot()))
-	}
-
-	commands := map[string]func(net.Conn, ...string){
-		"echo":     cmdEcho,
-		"ping":     cmdPing,
-		"set":      cmdSet,
-		"get":      cmdGet,
-		"info":     cmdInfo,
-		"replconf": cmdReplConf,
-		"psync":    cmdPsync,
+	commands := map[string]Command{
+		"echo":     CommandEcho{},
+		"ping":     CommandPing{},
+		"set":      CommandSet{replicasManager: replicasManager, values: &values},
+		"get":      CommandGet{values: &values},
+		"info":     CommandInfo{redisInfo: &redisInfo},
+		"replconf": CommandReplConf{},
+		"psync":    CommandPsync{replicasManager},
 	}
 next_connection:
 	for {
@@ -156,7 +72,12 @@ next_connection:
 			continue
 		}
 		logger.Debug("new connection established")
-		defer conn.Close()
+		isConnBorrowed := false
+		defer func() {
+			if !isConnBorrowed {
+				conn.Close()
+			}
+		}()
 		request := make([]byte, 0, bufSize)
 		buf := make([]byte, bufSize)
 		for n, err := conn.Read(buf); n != 0 || err != io.EOF; n, err = conn.Read(buf) {
@@ -188,7 +109,9 @@ next_connection:
 					send(conn, respError(fmt.Sprintf("ERR unknown command %s", parsedCmd[0])))
 					continue next_connection
 				}
-				cmd(conn, parsedCmd[1:]...)
+				if err = cmd.Call(conn, parsedCmd[1:]...); err != nil {
+					logger.Warn("error perform command", "cmd", cmd, "err", err)
+				}
 			}
 		}
 	}
@@ -199,7 +122,10 @@ func parseAddress(hostPort string) string {
 }
 
 func main() {
-	var level slog.Level
+	var (
+		level           slog.Level
+		replicasManager *ReplicasManager
+	)
 	flag.Parse()
 	err := level.UnmarshalText([]byte(*logLevel))
 	if err != nil {
@@ -221,6 +147,7 @@ func main() {
 		slog.Info("connected to redis server", "address", address)
 	} else {
 		redisInfo = NewRedisInfo("master")
+		replicasManager = NewReplicasManager()
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", *port))
@@ -235,8 +162,13 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			commandWorker(i, listener)
+			commandWorker(i, listener, replicasManager)
 		}()
+	}
+
+	if replicasManager != nil {
+		go replicasManager.NotifyReplicas()
+		// TODO: graceful replica notifiers
 	}
 	wg.Wait()
 }
