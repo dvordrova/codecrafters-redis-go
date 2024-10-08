@@ -87,7 +87,7 @@ func (cmdSet CommandSet) Call(conn net.Conn, args ...string) error {
 		Expire: time.Now().Add(time.Duration(ms) * time.Millisecond),
 	})
 	if cmdSet.replicasManager != nil {
-		go cmdSet.replicasManager.LogCommand("echo", args...)
+		go cmdSet.replicasManager.LogCommand("set", args...)
 	}
 	return send(conn, respString("OK"))
 }
