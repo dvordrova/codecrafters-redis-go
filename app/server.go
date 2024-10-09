@@ -92,9 +92,12 @@ func commandWorker(commandSource CommandSourceType, workerId int, listener net.L
 		logger.Debug("new connection established")
 		redisConn := NewRedisConnect(conn)
 		readFromConnection(logger, commands, redisConn, commandSource)
-		// if !redisConn.IsBorrowed {
-		// 	conn.Close()
-		// }
+		if redisConn.IsBorrowed {
+			// replicas manager will do the job
+			break
+		} else {
+			conn.Close()
+		}
 	}
 }
 
