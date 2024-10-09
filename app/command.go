@@ -169,5 +169,5 @@ type CommandWait struct {
 }
 
 func (cmdWait CommandWait) Call(conn *RedisConnect, _ CommandSourceType, args ...string) error {
-	return conn.Send(respInt(0))
+	return conn.Send(respInt(cmdWait.replicasManager.GetReplicasCount()))
 }

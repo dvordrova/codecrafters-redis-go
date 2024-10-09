@@ -17,6 +17,10 @@ func NewReplicasManager() *ReplicasManager {
 	}
 }
 
+func (rm *ReplicasManager) GetReplicasCount() int {
+	return len(rm.replicasCommands)
+}
+
 func (rm *ReplicasManager) RegisterReplica(conn *RedisConnect) {
 	slog.Debug("new replica registered")
 	rm.replicasConnMutex.Lock()
