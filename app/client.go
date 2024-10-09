@@ -71,7 +71,6 @@ func (client *RedisClient) readRDBSnapshot() error {
 		fmt.Errorf("reading length of RDB snapshot failed: %w", err)
 	}
 	n, err := strconv.Atoi(text[1:])
-	slog.Debug("can be read from buffer", "bytes", client.reader.Buffered())
 	if err != nil {
 		return fmt.Errorf("reading length of RDB snapshot failed: %w", err)
 	}
@@ -81,6 +80,7 @@ func (client *RedisClient) readRDBSnapshot() error {
 	if err != nil {
 		return fmt.Errorf("reading payload of RDB snapshot failed: %w", err)
 	}
+	slog.Debug("read from connection", "buf", buf)
 
 	// TODO: make something with snapshot
 	return nil
