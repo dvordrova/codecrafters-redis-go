@@ -12,6 +12,14 @@ import (
 
 // FIXME: command performed -> must replication, even if it is error for reply to client
 
+type CommandSourceType int64
+
+const (
+	UserToMaster CommandSourceType = iota
+	UserToReplica
+	MasterToReplica
+)
+
 func send(conn net.Conn, msg string) error {
 	slog.Debug("sending", "msg", msg)
 	n, err := conn.Write([]byte(msg))
@@ -22,20 +30,20 @@ func send(conn net.Conn, msg string) error {
 }
 
 type Command interface {
-	Call(net.Conn, ...string) error
+	Call(net.Conn, CommandSourceType, ...string) error
 }
 
 type CommandPing struct {
 }
 
-func (cmdPing CommandPing) Call(conn net.Conn, args ...string) error {
+func (cmdPing CommandPing) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
 	return send(conn, respString("PONG"))
 }
 
 type CommandEcho struct {
 }
 
-func (cmdEcho CommandEcho) Call(conn net.Conn, args ...string) error {
+func (cmdEcho CommandEcho) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
 	if len(args) != 1 {
 		send(conn, respError("ERR 'echo' command accepts 1 param"))
 		return fmt.Errorf("ERR 'echo' command accepts 1 param")
@@ -47,7 +55,7 @@ type CommandInfo struct {
 	redisInfo *RedisInfo
 }
 
-func (cmdInfo CommandInfo) Call(conn net.Conn, args ...string) error {
+func (cmdInfo CommandInfo) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
 	if len(args) != 1 {
 		send(conn, respError("ERR 'info' command accepts 1 param"))
 		return fmt.Errorf("ERR 'info' command accepts 1 param")
@@ -60,7 +68,11 @@ type CommandSet struct {
 	values          *sync.Map
 }
 
-func (cmdSet CommandSet) Call(conn net.Conn, args ...string) error {
+func (cmdSet CommandSet) Call(conn net.Conn, commandSource CommandSourceType, args ...string) error {
+	if commandSource == UserToReplica {
+		send(conn, respError("READONLY You can't write against a read only replica."))
+		return fmt.Errorf("READONLY You can't write against a read only replica.")
+	}
 	usageError := fmt.Errorf("ERR 'set' usage: set <key> <value> [PX <time_ms>]")
 	if len(args) != 2 && len(args) != 4 {
 		send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
@@ -71,7 +83,10 @@ func (cmdSet CommandSet) Call(conn net.Conn, args ...string) error {
 		if cmdSet.replicasManager != nil {
 			go cmdSet.replicasManager.LogCommand("set", args...)
 		}
-		return send(conn, respString("OK"))
+		if commandSource != MasterToReplica {
+			return send(conn, respString("OK"))
+		}
+		return nil
 	}
 	if strings.ToLower(args[2]) != "px" {
 		send(conn, respError("ERR 'set' usage: set <key> <value> [PX <time_ms>]"))
@@ -88,6 +103,10 @@ func (cmdSet CommandSet) Call(conn net.Conn, args ...string) error {
 	})
 	if cmdSet.replicasManager != nil {
 		go cmdSet.replicasManager.LogCommand("set", args...)
+		if commandSource != MasterToReplica {
+			return send(conn, respString("OK"))
+		}
+		return nil
 	}
 	return send(conn, respString("OK"))
 }
@@ -96,7 +115,7 @@ type CommandGet struct {
 	values *sync.Map
 }
 
-func (cmdGet CommandGet) Call(conn net.Conn, args ...string) error {
+func (cmdGet CommandGet) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
 	usageError := fmt.Errorf("ERR 'get' command accepts 1 param")
 
 	if len(args) != 1 {
@@ -125,7 +144,7 @@ func (cmdGet CommandGet) Call(conn net.Conn, args ...string) error {
 
 type CommandReplConf struct{}
 
-func (cmdReplConf CommandReplConf) Call(conn net.Conn, args ...string) error {
+func (cmdReplConf CommandReplConf) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
 	return send(conn, respString("OK"))
 }
 
@@ -133,7 +152,7 @@ type CommandPsync struct {
 	replicasManager *ReplicasManager
 }
 
-func (cmdPsync CommandPsync) Call(conn net.Conn, args ...string) error {
+func (cmdPsync CommandPsync) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
 	err := send(conn, respString(fmt.Sprintf("FULLRESYNC %s 0", redisInfo.GetMasterReplId())))
 	if err != nil {
 		return fmt.Errorf("can't return FULLRESYNC answer: %w", err)

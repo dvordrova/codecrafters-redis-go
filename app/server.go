@@ -52,19 +52,49 @@ func getRDBSnapshot() []byte {
 	return res
 }
 
-func commandWorker(workerId int, listener net.Listener, replicasManager *ReplicasManager) {
+func readFromConnection(logger *slog.Logger, commands map[string]Command, conn net.Conn, commandSource CommandSourceType) {
+	request := make([]byte, 0, bufSize)
+	buf := make([]byte, bufSize)
+	for n, err := conn.Read(buf); n != 0 || err != io.EOF; n, err = conn.Read(buf) {
+		if err != nil {
+			logger.Warn("failed read", "err", err)
+			return
+		}
+		request = append(request, buf[:n]...)
+		logger.Debug("read from connection", "bytes", n)
+		for len(request) != 0 {
+			parsedCmd, newStart, err := parseCommand(request)
+			errNotParsed := &ErrorNotAllParsed{}
+			if errors.As(err, &errNotParsed) {
+				break
+			}
+			if err != nil {
+				logger.Warn("bad parsing command", "err", err)
+				send(conn, respError(fmt.Sprintf("ERR %v", err)))
+				return
+			}
+			request = request[newStart:]
+
+			if len(parsedCmd) == 0 {
+				send(conn, respError("ERR empty command"))
+				return
+			}
+			cmd, ok := commands[parsedCmd[0]]
+			if !ok {
+				send(conn, respError(fmt.Sprintf("ERR unknown command %s", parsedCmd[0])))
+				return
+			}
+			if err = cmd.Call(conn, commandSource, parsedCmd[1:]...); err != nil {
+				logger.Warn("error perform command", "cmd", cmd, "err", err)
+			}
+		}
+	}
+}
+
+// TODO: move logger to context
+func commandWorker(commandSource CommandSourceType, workerId int, listener net.Listener, replicasManager *ReplicasManager, commands map[string]Command) {
 	logger := slog.Default().With("worker", workerId)
 
-	commands := map[string]Command{
-		"echo":     CommandEcho{},
-		"ping":     CommandPing{},
-		"set":      CommandSet{replicasManager: replicasManager, values: &values},
-		"get":      CommandGet{values: &values},
-		"info":     CommandInfo{redisInfo: &redisInfo},
-		"replconf": CommandReplConf{},
-		"psync":    CommandPsync{replicasManager},
-	}
-next_connection:
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -72,48 +102,8 @@ next_connection:
 			continue
 		}
 		logger.Debug("new connection established")
-		isConnBorrowed := false
-		defer func() {
-			if !isConnBorrowed {
-				conn.Close()
-			}
-		}()
-		request := make([]byte, 0, bufSize)
-		buf := make([]byte, bufSize)
-		for n, err := conn.Read(buf); n != 0 || err != io.EOF; n, err = conn.Read(buf) {
-			if err != nil {
-				logger.Warn("failed read", "err", err)
-				continue next_connection
-			}
-			request = append(request, buf[:n]...)
-			logger.Debug("read from connection", "bytes", n)
-			for len(request) != 0 {
-				parsedCmd, newStart, err := parseCommand(request)
-				errNotParsed := &ErrorNotAllParsed{}
-				if errors.As(err, &errNotParsed) {
-					break
-				}
-				if err != nil {
-					logger.Warn("bad parsing command", "err", err)
-					send(conn, respError(fmt.Sprintf("ERR %v", err)))
-					continue next_connection
-				}
-				request = request[newStart:]
-
-				if len(parsedCmd) == 0 {
-					send(conn, respError("ERR empty command"))
-					continue next_connection
-				}
-				cmd, ok := commands[parsedCmd[0]]
-				if !ok {
-					send(conn, respError(fmt.Sprintf("ERR unknown command %s", parsedCmd[0])))
-					continue next_connection
-				}
-				if err = cmd.Call(conn, parsedCmd[1:]...); err != nil {
-					logger.Warn("error perform command", "cmd", cmd, "err", err)
-				}
-			}
-		}
+		// TODO: close connection?
+		readFromConnection(logger, commands, conn, commandSource)
 	}
 }
 
@@ -125,6 +115,7 @@ func main() {
 	var (
 		level           slog.Level
 		replicasManager *ReplicasManager
+		commandSource   CommandSourceType
 	)
 	flag.Parse()
 	err := level.UnmarshalText([]byte(*logLevel))
@@ -137,7 +128,7 @@ func main() {
 	slog.SetDefault(slog.New(logger))
 
 	if *replicaOf != "" {
-		// TODO: parse and connect
+		commandSource = UserToReplica
 		redisInfo = NewRedisInfo("slave")
 		address := parseAddress(*replicaOf)
 		redisClient, err = NewRedisClient(address, *port)
@@ -146,6 +137,7 @@ func main() {
 		}
 		slog.Info("connected to redis server", "address", address)
 	} else {
+		commandSource = UserToMaster
 		redisInfo = NewRedisInfo("master")
 		replicasManager = NewReplicasManager()
 	}
@@ -157,18 +149,31 @@ func main() {
 	}
 	slog.Debug("redis is listening", "port", *port)
 
+	commands := map[string]Command{
+		"echo":     CommandEcho{},
+		"ping":     CommandPing{},
+		"set":      CommandSet{replicasManager: replicasManager, values: &values},
+		"get":      CommandGet{values: &values},
+		"info":     CommandInfo{redisInfo: &redisInfo},
+		"replconf": CommandReplConf{},
+		"psync":    CommandPsync{replicasManager},
+	}
+
 	wg := sync.WaitGroup{}
+
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			commandWorker(i, listener, replicasManager)
+			commandWorker(commandSource, i, listener, replicasManager, commands)
 		}()
 	}
 
 	if replicasManager != nil {
 		go replicasManager.NotifyReplicas()
 		// TODO: graceful replica notifiers
+	} else {
+		go redisClient.Listen(commands)
 	}
 	wg.Wait()
 }

@@ -3,13 +3,18 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"strconv"
 	"time"
 )
 
 type RedisClient struct {
-	conn net.Conn
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
+	// TODO: rad/write timeouts
 }
 
 func NewRedisClient(address string, myPort int) (*RedisClient, error) {
@@ -17,7 +22,9 @@ func NewRedisClient(address string, myPort int) (*RedisClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new redis client connect to %s: %w", address, err)
 	}
-	client := RedisClient{conn: conn}
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
+	client := RedisClient{conn: conn, reader: reader, writer: writer}
 	if err = client.doHandShake(myPort); err != nil {
 		return nil, fmt.Errorf("redis handshake to %s failed: %w", address, err)
 	}
@@ -26,24 +33,57 @@ func NewRedisClient(address string, myPort int) (*RedisClient, error) {
 
 func (client *RedisClient) sendCommand(cmd string, args ...string) (string, error) {
 	client.conn.SetDeadline(time.Now().Add(1 * time.Second))
-	writer := bufio.NewWriter(client.conn)
-	_, err := writer.WriteString(respCommand(cmd, args...))
+	_, err := client.writer.WriteString(respCommand(cmd, args...))
 	if err != nil {
 		return "", fmt.Errorf("sending %w", err)
 	}
-	err = writer.Flush()
+	err = client.writer.Flush()
 	if err != nil {
 		return "", fmt.Errorf("sending %w", err)
 	}
-	scanner := bufio.NewScanner(bufio.NewReader(client.conn))
-	if !scanner.Scan() {
-		return "", fmt.Errorf("no asnwer: %w", scanner.Err())
+	text, err := client.readLine()
+	if err != nil {
+		return "", fmt.Errorf("reading asnwer error: %w", err)
 	}
-	return scanner.Text(), nil
+	return text, nil
 }
 
-func (client *RedisClient) readRDBSnapshot() {
-	return
+func (client *RedisClient) readLine() (string, error) {
+	client.conn.SetDeadline(time.Now().Add(1 * time.Second))
+	var text []byte
+	for {
+		appendText, isPrefix, err := client.reader.ReadLine()
+		if err != nil {
+			return "", fmt.Errorf("can't read line: %w", err)
+		}
+		text = append(text, appendText...)
+		if !isPrefix {
+			break
+		}
+	}
+	return string(text), nil
+}
+
+func (client *RedisClient) readRDBSnapshot() error {
+	client.conn.SetDeadline(time.Now().Add(5 * time.Second))
+	text, err := client.readLine()
+	if err != nil {
+		fmt.Errorf("reading length of RDB snapshot failed: %w", err)
+	}
+	n, err := strconv.Atoi(text[1:])
+	slog.Debug("can be read from buffer", "bytes", client.reader.Buffered())
+	if err != nil {
+		return fmt.Errorf("reading length of RDB snapshot failed: %w", err)
+	}
+	buf := make([]byte, n)
+	_, err = io.ReadFull(client.reader, buf)
+
+	if err != nil {
+		return fmt.Errorf("reading payload of RDB snapshot failed: %w", err)
+	}
+
+	// TODO: make something with snapshot
+	return nil
 }
 
 func (client *RedisClient) doHandShake(myPort int) error {
@@ -75,11 +115,18 @@ func (client *RedisClient) doHandShake(myPort int) error {
 	if err != nil {
 		return fmt.Errorf("psync command failed: %w", err)
 	}
-	client.readRDBSnapshot()
+	slog.Debug("PSYNC", "result", result)
+	err = client.readRDBSnapshot()
+	if err != nil {
+		return fmt.Errorf("reading rdb snapshot failed: %w", err)
+	}
 
-	// TODO
-	// if result != "+OK" {
-	// 	return fmt.Errorf("psync command result: %s", result)
-	// }
 	return nil
+}
+
+func (client *RedisClient) Listen(commands map[string]Command) {
+	logger := slog.Default().With("worker", "replica-listener")
+	// FIXME: very strange
+	client.conn.SetDeadline(time.Now().Add(1 * time.Hour))
+	readFromConnection(logger, commands, client.conn, MasterToReplica)
 }
