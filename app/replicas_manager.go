@@ -18,9 +18,7 @@ func NewReplicasManager() *ReplicasManager {
 }
 
 func (rm *ReplicasManager) GetReplicasCount() int {
-	rm.replicasConnMutex.RLock()
-	defer rm.replicasConnMutex.RUnlock()
-	return len(rm.replicasCommands)
+	return len(rm.replicasConn)
 }
 
 func (rm *ReplicasManager) RegisterReplica(conn *RedisConnect) {
