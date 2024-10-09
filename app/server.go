@@ -2,10 +2,8 @@ package main
 
 import (
 	"encoding/base64"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -52,43 +50,31 @@ func getRDBSnapshot() []byte {
 	return res
 }
 
-func readFromConnection(logger *slog.Logger, commands map[string]Command, conn net.Conn, commandSource CommandSourceType) {
-	request := make([]byte, 0, bufSize)
-	buf := make([]byte, bufSize)
-	for n, err := conn.Read(buf); n != 0 || err != io.EOF; n, err = conn.Read(buf) {
-		if err != nil {
-			logger.Warn("failed read", "err", err)
+func readFromConnection(logger *slog.Logger, commands map[string]Command, conn *RedisConnect, commandSource CommandSourceType) {
+	var (
+		err       error
+		parsedCmd []string
+	)
+	for parsedCmd, err = conn.ReadCommand(); err == nil; parsedCmd, err = conn.ReadCommand() {
+		if len(parsedCmd) == 0 {
+			conn.Send(respError("ERR empty command"))
 			return
 		}
-		request = append(request, buf[:n]...)
-		logger.Debug("read from connection", "bytes", n)
-		for len(request) != 0 {
-			parsedCmd, newStart, err := parseCommand(request)
-			errNotParsed := &ErrorNotAllParsed{}
-			if errors.As(err, &errNotParsed) {
-				break
+		lwr := strings.ToLower(parsedCmd[0])
+		cmd, ok := commands[lwr]
+		if !ok {
+			logger.Warn("unknown command", "parsedCmd", parsedCmd)
+			if commandSource != MasterToReplica {
+				conn.Send(respError(fmt.Sprintf("ERR unknown command %s", lwr)))
 			}
-			if err != nil {
-				logger.Warn("bad parsing command", "err", err)
-				send(conn, respError(fmt.Sprintf("ERR %v", err)))
-				return
-			}
-			request = request[newStart:]
-
-			if len(parsedCmd) == 0 {
-				send(conn, respError("ERR empty command"))
-				return
-			}
-			cmd, ok := commands[parsedCmd[0]]
-			if !ok {
-				send(conn, respError(fmt.Sprintf("ERR unknown command %s", parsedCmd[0])))
-				return
-			}
-			if err = cmd.Call(conn, commandSource, parsedCmd[1:]...); err != nil {
-				logger.Warn("error perform command", "cmd", cmd, "err", err)
-			}
+			continue
+		}
+		if err = cmd.Call(conn, commandSource, parsedCmd[1:]...); err != nil {
+			logger.Warn("error perform command", "cmd", cmd, "err", err)
 		}
 	}
+	logger.Warn("failed read", "err", err)
+	return
 }
 
 // TODO: move logger to context
@@ -102,8 +88,11 @@ func commandWorker(commandSource CommandSourceType, workerId int, listener net.L
 			continue
 		}
 		logger.Debug("new connection established")
-		// TODO: close connection?
-		readFromConnection(logger, commands, conn, commandSource)
+		redisConn := NewRedisConnect(conn)
+		readFromConnection(logger, commands, redisConn, commandSource)
+		// if !redisConn.IsBorrowed {
+		// 	conn.Close()
+		// }
 	}
 }
 

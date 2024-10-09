@@ -2,12 +2,11 @@ package main
 
 import (
 	"log/slog"
-	"net"
 	"sync"
 )
 
 type ReplicasManager struct {
-	replicasConn      []net.Conn
+	replicasConn      []*RedisConnect
 	replicasConnMutex sync.RWMutex
 	replicasCommands  chan []string
 }
@@ -18,11 +17,12 @@ func NewReplicasManager() *ReplicasManager {
 	}
 }
 
-func (rm *ReplicasManager) RegisterReplica(conn net.Conn) {
+func (rm *ReplicasManager) RegisterReplica(conn *RedisConnect) {
 	slog.Debug("new replica registered")
 	rm.replicasConnMutex.Lock()
 	defer rm.replicasConnMutex.Unlock()
 	rm.replicasConn = append(rm.replicasConn, conn)
+	conn.IsBorrowed = true
 }
 
 func (rm *ReplicasManager) LogCommand(cmd string, args ...string) {
@@ -40,7 +40,7 @@ func (rm *ReplicasManager) NotifyReplicas() {
 			for i, conn := range rm.replicasConn {
 				// TODO: non-blocking ??
 				slog.Debug("notify replica", "replica_id", i)
-				conn.Write([]byte(respCommand(cmds[0], cmds[1:]...)))
+				conn.SendCommand(cmds[0], cmds[1:]...)
 			}
 		}()
 	}
