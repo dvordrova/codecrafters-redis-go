@@ -18,6 +18,8 @@ func NewReplicasManager() *ReplicasManager {
 }
 
 func (rm *ReplicasManager) GetReplicasCount() int {
+	rm.replicasConnMutex.RLock()
+	defer rm.replicasConnMutex.RUnlock()
 	return len(rm.replicasCommands)
 }
 
