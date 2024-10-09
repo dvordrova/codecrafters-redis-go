@@ -22,7 +22,7 @@ func respBulkString(msg ...string) string {
 }
 
 func respInt(n int) string {
-	return fmt.Sprintf(":%d", n)
+	return fmt.Sprintf(":%d\r\n", n)
 }
 
 func respCommand(cmd string, args ...string) string {
