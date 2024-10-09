@@ -56,7 +56,6 @@ func readFromConnection(logger *slog.Logger, commands map[string]Command, conn *
 		parsedCmd []string
 	)
 	for parsedCmd, err = conn.ReadCommand(); err == nil; parsedCmd, err = conn.ReadCommand() {
-		conn.RememberPreviousBytes()
 		if len(parsedCmd) == 0 {
 			conn.Send(respError("ERR empty command"))
 			return
@@ -68,11 +67,13 @@ func readFromConnection(logger *slog.Logger, commands map[string]Command, conn *
 			if commandSource != MasterToReplica {
 				conn.Send(respError(fmt.Sprintf("ERR unknown command %s", lwr)))
 			}
-			continue
+		} else {
+			if err = cmd.Call(conn, commandSource, parsedCmd[1:]...); err != nil {
+				logger.Warn("error perform command", "cmd", cmd, "err", err)
+			}
 		}
-		if err = cmd.Call(conn, commandSource, parsedCmd[1:]...); err != nil {
-			logger.Warn("error perform command", "cmd", cmd, "err", err)
-		}
+
+		conn.RememberPreviousBytes()
 	}
 	logger.Warn("failed read", "err", err)
 	return
