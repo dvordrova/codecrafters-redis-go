@@ -148,6 +148,7 @@ func main() {
 		"info":     CommandInfo{redisInfo: &redisInfo},
 		"replconf": CommandReplConf{},
 		"psync":    CommandPsync{replicasManager},
+		"wait":     CommandWait{replicasManager},
 	}
 
 	wg := sync.WaitGroup{}

@@ -21,6 +21,10 @@ func respBulkString(msg ...string) string {
 	}
 }
 
+func respInt(n int) string {
+	return fmt.Sprintf(":%d", n)
+}
+
 func respCommand(cmd string, args ...string) string {
 	res := strings.Builder{}
 	res.WriteString(fmt.Sprintf("*%d\r\n$%d\r\n%s", len(args)+1, len(cmd), cmd))

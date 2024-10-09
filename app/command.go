@@ -163,3 +163,11 @@ func (cmdPsync CommandPsync) Call(conn *RedisConnect, _ CommandSourceType, args 
 	cmdPsync.replicasManager.RegisterReplica(conn)
 	return nil
 }
+
+type CommandWait struct {
+	replicasManager *ReplicasManager
+}
+
+func (cmdWait CommandWait) Call(conn *RedisConnect, _ CommandSourceType, args ...string) error {
+	return conn.Send(respInt(0))
+}
