@@ -141,7 +141,7 @@ func (cmdReplConf CommandReplConf) Call(conn *RedisConnect, commandSource Comman
 	slog.Debug("REPLCONF", "args", args, "commandSource", commandSource)
 	if commandSource == MasterToReplica {
 		if strings.ToLower(args[0]) == "getack" {
-			return conn.Send(respCommand("REPLCONF", "ACK", "0"))
+			return conn.Send(respCommand("REPLCONF", "ACK", strconv.Itoa(conn.PrevReadBytes)))
 		}
 	}
 	return conn.Send(respString("OK"))

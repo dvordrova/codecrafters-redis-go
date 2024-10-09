@@ -56,6 +56,7 @@ func readFromConnection(logger *slog.Logger, commands map[string]Command, conn *
 		parsedCmd []string
 	)
 	for parsedCmd, err = conn.ReadCommand(); err == nil; parsedCmd, err = conn.ReadCommand() {
+		conn.RememberPreviousBytes()
 		if len(parsedCmd) == 0 {
 			conn.Send(respError("ERR empty command"))
 			return
@@ -78,7 +79,7 @@ func readFromConnection(logger *slog.Logger, commands map[string]Command, conn *
 }
 
 // TODO: move logger to context
-func commandWorker(commandSource CommandSourceType, workerId int, listener net.Listener, replicasManager *ReplicasManager, commands map[string]Command) {
+func commandWorker(commandSource CommandSourceType, workerId int, listener net.Listener, commands map[string]Command) {
 	logger := slog.Default().With("worker", workerId)
 
 	for {
@@ -154,7 +155,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			commandWorker(commandSource, i, listener, replicasManager, commands)
+			commandWorker(commandSource, i, listener, commands)
 		}()
 	}
 

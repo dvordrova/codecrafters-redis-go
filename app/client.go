@@ -65,6 +65,7 @@ func (client *RedisClient) doHandShake(myPort int) error {
 	if err != nil {
 		return fmt.Errorf("reading rdb snapshot failed: %w", err)
 	}
+	client.conn.ReadBytes = 0
 
 	return nil
 }

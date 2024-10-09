@@ -11,12 +11,14 @@ import (
 )
 
 type RedisConnect struct {
-	Conn         net.Conn
-	IsBorrowed   bool
-	reader       *bufio.Reader
-	writer       *bufio.Writer
-	readTimeout  time.Duration
-	writeTimeout time.Duration
+	PrevReadBytes int
+	ReadBytes     int
+	Conn          net.Conn
+	IsBorrowed    bool
+	reader        *bufio.Reader
+	writer        *bufio.Writer
+	readTimeout   time.Duration
+	writeTimeout  time.Duration
 }
 
 func NewRedisConnect(conn net.Conn) *RedisConnect {
@@ -44,11 +46,13 @@ func (rc *RedisConnect) ReadLine() (string, error) {
 			break
 		}
 	}
+	rc.ReadBytes += len(text) + 2
 	return string(text), nil
 }
 
 func (rc *RedisConnect) ReadFull(buf []byte) error {
-	_, err := io.ReadFull(rc.reader, buf)
+	n, err := io.ReadFull(rc.reader, buf)
+	rc.ReadBytes += n
 	return err
 }
 
@@ -98,6 +102,10 @@ func (rc *RedisConnect) ReadRDBSnapshot() error {
 
 	// TODO: return snapshot to make something with it
 	return nil
+}
+
+func (rc *RedisConnect) RememberPreviousBytes() {
+	rc.PrevReadBytes = rc.ReadBytes
 }
 
 func (rc *RedisConnect) ReadCommand() ([]string, error) {
