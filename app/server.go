@@ -74,6 +74,9 @@ func readFromConnection(logger *slog.Logger, commands map[string]Command, conn *
 		}
 
 		conn.RememberPreviousBytes()
+		if conn.IsBorrowed {
+			break
+		}
 	}
 	logger.Warn("failed read", "err", err)
 	return
@@ -84,6 +87,7 @@ func commandWorker(commandSource CommandSourceType, workerId int, listener net.L
 	logger := slog.Default().With("worker", workerId)
 
 	for {
+		logger.Debug("waiting for new connection")
 		conn, err := listener.Accept()
 		if err != nil {
 			logger.Warn("error accepting connection", "err", err)
@@ -92,10 +96,7 @@ func commandWorker(commandSource CommandSourceType, workerId int, listener net.L
 		logger.Debug("new connection established")
 		redisConn := NewRedisConnect(conn)
 		readFromConnection(logger, commands, redisConn, commandSource)
-		if redisConn.IsBorrowed {
-			// replicas manager will do the job
-			break
-		} else {
+		if !redisConn.IsBorrowed {
 			conn.Close()
 		}
 	}
