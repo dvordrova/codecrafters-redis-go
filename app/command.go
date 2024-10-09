@@ -36,7 +36,10 @@ type Command interface {
 type CommandPing struct {
 }
 
-func (cmdPing CommandPing) Call(conn net.Conn, _ CommandSourceType, args ...string) error {
+func (cmdPing CommandPing) Call(conn net.Conn, commandSource CommandSourceType, args ...string) error {
+	if commandSource == MasterToReplica {
+		return nil
+	}
 	return send(conn, respString("PONG"))
 }
 
