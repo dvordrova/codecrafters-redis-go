@@ -145,6 +145,7 @@ func (cmdGet CommandGet) Call(conn net.Conn, _ CommandSourceType, args ...string
 type CommandReplConf struct{}
 
 func (cmdReplConf CommandReplConf) Call(conn net.Conn, commandSource CommandSourceType, args ...string) error {
+	slog.Debug("REPLCONF", "args", args, "commandSource", commandSource)
 	if commandSource == MasterToReplica {
 		if args[0] == "GETACK" {
 			return send(conn, respCommand("REPLCONF", "ACK", "0"))
