@@ -128,5 +128,7 @@ func (client *RedisClient) Listen(commands map[string]Command) {
 	logger := slog.Default().With("worker", "replica-listener")
 	// FIXME: very strange
 	client.conn.SetDeadline(time.Now().Add(1 * time.Hour))
-	readFromConnection(logger, commands, client.conn, MasterToReplica)
+	for {
+		readFromConnection(logger, commands, client.conn, MasterToReplica)
+	}
 }
